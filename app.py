@@ -11,9 +11,6 @@ import requests
 from bs4 import BeautifulSoup  # остаётся на случай, если понадобится fallback
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font
-# Если вы используете .env и библиотеку python-dotenv, раскомментируйте следующие строки:
-# from dotenv import load_dotenv
-# load_dotenv()
 
 # ——— Отключаем «шумные» логи (ниже уровня ERROR) ———
 logging.basicConfig(level=logging.ERROR)
@@ -21,25 +18,13 @@ logging.getLogger("urllib3").setLevel(logging.ERROR)
 logging.getLogger("requests").setLevel(logging.ERROR)
 
 # =============================================================================
-# 0) Секреты: читаем логины/пароли из переменных окружения (или Streamlit Secrets)
+# 0) Секреты: читаем логины/пароли из переменных окружения
 # =============================================================================
-# Вариант A: из переменных окружения
-WORK_LOGIN = os.getenv("WORK_LOGIN")
-WORK_PASSWORD = os.getenv("WORK_PASSWORD")
-ROBOTAUA_LOGIN = os.getenv("ROBOTAUA_LOGIN")
-ROBOTAUA_PASSWORD = os.getenv("ROBOTAUA_PASSWORD")
 
-# Если вы предпочитаете использовать Streamlit Secrets (./.streamlit/secrets.toml),
-# вместо os.getenv(...) раскомментируйте и используйте:
-#
-# try:
-#     WORK_LOGIN = st.secrets["credentials"]["WORK_LOGIN"]
-#     WORK_PASSWORD = st.secrets["credentials"]["WORK_PASSWORD"]
-#     ROBOTAUA_LOGIN = st.secrets["credentials"]["ROBOTAUA_LOGIN"]
-#     ROBOTAUA_PASSWORD = st.secrets["credentials"]["ROBOTAUA_PASSWORD"]
-# except KeyError:
-#     st.error("Не удалось прочитать секреты из Streamlit Secrets. Проверьте .streamlit/secrets.toml.")
-#     st.stop()
+WORK_LOGIN = "ametrinhr@gmail.com"
+WORK_PASSWORD = "95#Ametrin1995"
+ROBOTAUA_LOGIN = "ametrinhr@gmail.com"
+ROBOTAUA_PASSWORD = "95#Ametrin1995"
 
 if not WORK_LOGIN or not WORK_PASSWORD:
     st.error("Переменные окружения WORK_LOGIN и WORK_PASSWORD не заданы.")
@@ -55,10 +40,7 @@ ROBOTA_UA_TOKEN = ""
 # ——— Константы ———
 WORK_LOCALE = "uk_UA"
 USER_AGENT = "StreamlitApp (ametrinhr@gmail.com)"
-
-# Имя файла, в котором хранится история резюме
 HISTORY_FILE = "resumes_history.xlsx"
-
 
 # =============================================================================
 # 1) Функции для авторизации и вытаскивания данных из API Robota.ua
@@ -67,16 +49,10 @@ HISTORY_FILE = "resumes_history.xlsx"
 def robota_ua_login(username: str, password: str) -> str:
     """
     Авторизуемся на Robota.ua → возвращаем JWT-токен (Bearer).
-    Запрос: POST https://auth-api.robota.ua/Login
     """
     url = "https://auth-api.robota.ua/Login"
-    payload = {
-        "username": username,
-        "password": password
-    }
-    headers = {
-        "User-Agent": USER_AGENT
-    }
+    payload = {"username": username, "password": password}
+    headers = {"User-Agent": USER_AGENT}
 
     try:
         resp = requests.post(url, json=payload, headers=headers, timeout=15)
@@ -96,7 +72,6 @@ def robota_ua_login(username: str, password: str) -> str:
 def ensure_robota_ua_token() -> str:
     """
     Проверяем, есть ли глобальный ROBOTA_UA_TOKEN. Если нет — запускаем robota_ua_login.
-    Возвращаем токен или пустую строку.
     """
     global ROBOTA_UA_TOKEN
     if not ROBOTA_UA_TOKEN:
@@ -197,7 +172,7 @@ def get_resume_by_id_on_robotaua(resume_id: int, mark_view: bool = False) -> (st
 
 def extract_robotaua_candidate_id(link: str) -> str:
     """
-    Находим в URL шаблон '/candidates/<цифры>' и возвращаем эти цифры.
+    Извлекает ID кандидата из URL "/candidates/<ID>".
     """
     m = re.search(r"/candidates/(\d+)", link)
     return m.group(1) if m else ""
@@ -205,7 +180,7 @@ def extract_robotaua_candidate_id(link: str) -> str:
 
 def extract_robotaua_resume_id(link: str) -> str:
     """
-    Находим в URL шаблон '/resume/<цифры>' и возвращаем эти цифры.
+    Извлекает ID резюме из URL "/resume/<ID>".
     """
     m = re.search(r"/resume/(\d+)", link)
     return m.group(1) if m else ""
@@ -213,7 +188,7 @@ def extract_robotaua_resume_id(link: str) -> str:
 
 def extract_applies_id(link: str) -> str:
     """
-    Находим в URL параметр 'id=...' и возвращаем значение после '=' до '&' или конца строки.
+    Извлекает ID отклика из параметра "id=".
     """
     m = re.search(r"id=([^&]+)", link)
     return m.group(1) if m else ""
@@ -221,7 +196,7 @@ def extract_applies_id(link: str) -> str:
 
 def extract_interaction_id(link: str) -> str:
     """
-    Находим в URL '/apply/interaction?id=...' и возвращаем значение после '='.
+    Извлекает ID interaction из URL "/apply/interaction?id=<ID>".
     """
     m = re.search(r"/apply/interaction\?id=([^&]+)", link)
     return m.group(1) if m else ""
@@ -340,6 +315,15 @@ def save_history_to_excel(df: pd.DataFrame, path: str) -> None:
 
 st.title("Сбор резюме с robota.ua и work.ua с историей")
 
+# Если ключа "processed" нет — инициализируем его как False
+if "processed" not in st.session_state:
+    st.session_state.processed = False
+
+# Если ключа "show_confirm_clear" нет — инициализируем его как False
+if "show_confirm_clear" not in st.session_state:
+    st.session_state.show_confirm_clear = False
+
+# Поле для ввода ссылок
 links_input = st.text_area(
     "Вставьте ссылки на резюме (по одной на строку):",
     placeholder=(
@@ -348,86 +332,127 @@ links_input = st.text_area(
     )
 )
 
-if st.button("Обработать"):
-    links = [u.strip() for u in links_input.splitlines() if u.strip()]
-    if not links:
-        st.error("Нужно хотя бы одно URL.")
-        st.stop()
+# Располагаем две колонки: "Обработать" и "Очистить файл"
+col1, col2 = st.columns(2)
 
-    def format_phone(raw: str) -> str:
-        """
-        Форматируем телефон в вид "0XX XXX XX XX".
-        Если длина цифр некорректна, возвращаем исходную строку.
-        """
-        digits = re.sub(r"\D", "", raw)
-        if digits.startswith("380") and len(digits) == 12:
-            digits = "0" + digits[3:]
-        if len(digits) != 10:
-            return raw
-        return f"{digits[0:3]} {digits[3:6]} {digits[6:8]} {digits[8:10]}"
+with col1:
+    if st.button("Обработать"):
+        links = [u.strip() for u in links_input.splitlines() if u.strip()]
+        if not links:
+            st.error("Нужно хотя бы одно URL.")
+            st.stop()
 
-    # ——— Basic-авторизация для Work.ua: формируем хедер один раз:
-    creds = f"{WORK_LOGIN}:{WORK_PASSWORD}"
-    work_basic = base64.b64encode(creds.encode("utf-8")).decode("ascii")
-    work_headers = {
-        "Authorization": f"Basic {work_basic}",
-        "X-Locale": WORK_LOCALE,
-        "User-Agent": USER_AGENT
-    }
+        def format_phone(raw: str) -> str:
+            """
+            Форматируем телефон в вид "0XX XXX XX XX".
+            Если длина цифр некорректна, возвращаем исходную строку.
+            """
+            digits = re.sub(r"\D", "", raw)
+            if digits.startswith("380") and len(digits) == 12:
+                digits = "0" + digits[3:]
+            if len(digits) != 10:
+                return raw
+            return f"{digits[0:3]} {digits[3:6]} {digits[6:8]} {digits[8:10]}"
 
-    # Получаем токен Robota.ua один раз перед циклом
-    ensure_robota_ua_token()
+        # Basic-авторизация для Work.ua: формируем хедер один раз
+        creds = f"{WORK_LOGIN}:{WORK_PASSWORD}"
+        work_basic = base64.b64encode(creds.encode("utf-8")).decode("ascii")
+        work_headers = {
+            "Authorization": f"Basic {work_basic}",
+            "X-Locale": WORK_LOCALE,
+            "User-Agent": USER_AGENT
+        }
 
-    new_results = []
-    for url in links:
-        try:
-            if "work.ua" in url.lower():
-                # Обработка через API Work.ua
-                m = re.search(r"/resumes/(\d+)", url)
-                if not m:
-                    raise ValueError("Неверный формат URL work.ua")
-                rid = m.group(1)
+        # Получаем JWT Robota.ua один раз
+        ensure_robota_ua_token()
 
-                r = requests.get(
-                    "https://api.work.ua/resume",
-                    params={"resume_id": rid},
-                    headers=work_headers,
-                    timeout=10
-                )
-                r.raise_for_status()
-                data = r.json().get("result", {})
-                fio = " ".join(filter(None, [data.get("first_name"), data.get("last_name")]))
-                phone_raw = data.get("contacts", {}).get("phone_prim", "")
+        new_results = []
+        for url in links:
+            try:
+                if "work.ua" in url.lower():
+                    # Обработка через API Work.ua
+                    m = re.search(r"/resumes/(\d+)", url)
+                    if not m:
+                        raise ValueError("Неверный формат URL work.ua")
+                    rid = m.group(1)
 
+                    r = requests.get(
+                        "https://api.work.ua/resume",
+                        params={"resume_id": rid},
+                        headers=work_headers,
+                        timeout=10
+                    )
+                    r.raise_for_status()
+                    data = r.json().get("result", {})
+                    fio = " ".join(filter(None, [data.get("first_name"), data.get("last_name")]))
+                    phone_raw = data.get("contacts", {}).get("phone_prim", "")
+
+                else:
+                    # Обработка через API Robota.ua
+                    fio, phone_raw = parse_robota_ua_link(url)
+                    if not fio:
+                        st.warning(f"Не удалось получить ФИО по ссылке {url}, пропускаем")
+                        continue
+
+                phone = format_phone(phone_raw)
+                date_str = datetime.now().strftime("%d.%m.%y")
+
+                new_results.append({
+                    "Дата": date_str,
+                    "ФИО": fio,
+                    "Телефон": phone,
+                    "Ссылка": url
+                })
+
+            except Exception as e:
+                st.warning(f"Ошибка обработки {url}: {e}")
+
+        if new_results:
+            # Сохраняем в Excel и ставим флаг processed = True
+            df_new = pd.DataFrame(new_results)
+            save_history_to_excel(df_new, HISTORY_FILE)
+            st.session_state.processed = True
+        else:
+            st.info("Нет успешно обработанных резюме.")
+
+with col2:
+    if st.button("Очистить файл"):
+        # Показываем модалку для подтверждения
+        st.session_state.show_confirm_clear = True
+
+# Блок подтверждения очистки (показывается поверх, без перезагрузки)
+if st.session_state.show_confirm_clear:
+    st.warning("Вы уверены, что хотите полностью очистить файл истории?")
+    confirm1, confirm2 = st.columns(2)
+    with confirm1:
+        if st.button("Да, очистить", key="confirm_yes"):
+            # Удаляем файл истории, если он существует
+            if os.path.exists(HISTORY_FILE):
+                try:
+                    os.remove(HISTORY_FILE)
+                    st.success("Файл истории успешно очищен.")
+                except Exception as e:
+                    st.error(f"Ошибка при удалении файла: {e}")
             else:
-                # Обработка через API Robota.ua
-                fio, phone_raw = parse_robota_ua_link(url)
-                if not fio:
-                    st.warning(f"Не удалось получить ФИО по ссылке {url}, пропускаем")
-                    continue
+                st.info("Файл истории отсутствует, очищать нечего.")
+            # Сбрасываем оба флага, чтобы модалка скрылась и таблица не отображалась
+            st.session_state.show_confirm_clear = False
+            st.session_state.processed = False
 
-            phone = format_phone(phone_raw)
-            date_str = datetime.now().strftime("%d.%m.%y")
+    with confirm2:
+        if st.button("Нет", key="confirm_no"):
+            # Пользователь отказался, просто скрываем модалку
+            st.session_state.show_confirm_clear = False
 
-            new_results.append({
-                "Дата": date_str,
-                "ФИО": fio,
-                "Телефон": phone,
-                "Ссылка": url
-            })
-
-        except Exception as e:
-            st.warning(f"Ошибка обработки {url}: {e}")
-
-    if new_results:
-        df_new = pd.DataFrame(new_results)
-        save_history_to_excel(df_new, HISTORY_FILE)
-
+# После всех кнопок и модалок: рендерим историю только если processed == True и файл существует
+if st.session_state.processed and os.path.exists(HISTORY_FILE):
+    try:
         df_hist_all = pd.read_excel(HISTORY_FILE)
         st.subheader("Вся история кандидатов")
+        # Таблица занимает полную ширину, т.к. мы уже вышли из st.columns
         st.table(df_hist_all)
 
-        # Предлагаем скачать файл-историю
+        # Кнопка скачивания истории
         with open(HISTORY_FILE, "rb") as f:
             data_bytes = f.read()
         st.download_button(
@@ -436,5 +461,5 @@ if st.button("Обработать"):
             file_name=f"resumes_history_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-    else:
-        st.info("Нет успешно обработанных резюме.")
+    except Exception as e:
+        st.error(f"Не удалось загрузить файл истории: {e}")

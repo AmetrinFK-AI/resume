@@ -2,6 +2,7 @@ import os
 import re
 import io
 import base64
+import logging
 from datetime import datetime
 
 import streamlit as st
@@ -10,33 +11,63 @@ import requests
 from bs4 import BeautifulSoup  # остаётся на случай, если понадобится fallback
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font
+# Если вы используете .env и библиотеку python-dotenv, раскомментируйте следующие строки:
+# from dotenv import load_dotenv
+# load_dotenv()
 
-# ——— Встроенные учётные данные ———
-WORK_LOGIN = "ametrinhr@gmail.com"
-WORK_PASSWORD = "95#Ametrin1995"
+# ——— Отключаем «шумные» логи (ниже уровня ERROR) ———
+logging.basicConfig(level=logging.ERROR)
+logging.getLogger("urllib3").setLevel(logging.ERROR)
+logging.getLogger("requests").setLevel(logging.ERROR)
 
-ROBOTAUA_LOGIN = "ametrinhr@gmail.com"
-ROBOTAUA_PASSWORD = "95#Ametrin1995"
+# =============================================================================
+# 0) Секреты: читаем логины/пароли из переменных окружения (или Streamlit Secrets)
+# =============================================================================
+# Вариант A: из переменных окружения
+WORK_LOGIN = os.getenv("WORK_LOGIN")
+WORK_PASSWORD = os.getenv("WORK_PASSWORD")
+ROBOTAUA_LOGIN = os.getenv("ROBOTAUA_LOGIN")
+ROBOTAUA_PASSWORD = os.getenv("ROBOTAUA_PASSWORD")
 
-# ——— Глобальная переменная для хранения JWT robota.ua ———
+# Если вы предпочитаете использовать Streamlit Secrets (./.streamlit/secrets.toml),
+# вместо os.getenv(...) раскомментируйте и используйте:
+#
+# try:
+#     WORK_LOGIN = st.secrets["credentials"]["WORK_LOGIN"]
+#     WORK_PASSWORD = st.secrets["credentials"]["WORK_PASSWORD"]
+#     ROBOTAUA_LOGIN = st.secrets["credentials"]["ROBOTAUA_LOGIN"]
+#     ROBOTAUA_PASSWORD = st.secrets["credentials"]["ROBOTAUA_PASSWORD"]
+# except KeyError:
+#     st.error("Не удалось прочитать секреты из Streamlit Secrets. Проверьте .streamlit/secrets.toml.")
+#     st.stop()
+
+if not WORK_LOGIN or not WORK_PASSWORD:
+    st.error("Переменные окружения WORK_LOGIN и WORK_PASSWORD не заданы.")
+    st.stop()
+
+if not ROBOTAUA_LOGIN or not ROBOTAUA_PASSWORD:
+    st.error("Переменные окружения ROBOTAUA_LOGIN и ROBOTAUA_PASSWORD не заданы.")
+    st.stop()
+
+# ——— Глобальная переменная для хранения JWT Robota.ua ———
 ROBOTA_UA_TOKEN = ""
 
 # ——— Константы ———
 WORK_LOCALE = "uk_UA"
 USER_AGENT = "StreamlitApp (ametrinhr@gmail.com)"
 
-# Имя файла на диске, в котором будет храниться вся история
+# Имя файла, в котором хранится история резюме
 HISTORY_FILE = "resumes_history.xlsx"
 
 
 # =============================================================================
-# 1) Функции для авторизации и вытаскивания данных из API robota.ua
+# 1) Функции для авторизации и вытаскивания данных из API Robota.ua
 # =============================================================================
 
 def robota_ua_login(username: str, password: str) -> str:
     """
-    Авторизуемся на robota.ua → получаем Bearer-токен (JWT).
-    POST https://auth-api.robota.ua/Login
+    Авторизуемся на Robota.ua → возвращаем JWT-токен (Bearer).
+    Запрос: POST https://auth-api.robota.ua/Login
     """
     url = "https://auth-api.robota.ua/Login"
     payload = {
@@ -51,32 +82,33 @@ def robota_ua_login(username: str, password: str) -> str:
         resp = requests.post(url, json=payload, headers=headers, timeout=15)
         resp.raise_for_status()
         raw = resp.json()
+        # Иногда API возвращает строку, иногда — объект с ключом accessToken
         if isinstance(raw, str):
             return raw.strip('"')
         if "accessToken" in raw:
             return raw["accessToken"]
         return ""
     except Exception as e:
-        st.error(f"Не удалось получить JWT от robota.ua: {e}")
+        st.error(f"Не удалось получить JWT от Robota.ua: {e}")
         return ""
 
 
 def ensure_robota_ua_token() -> str:
     """
-    Проверяем, есть ли глобальный ROBOTA_UA_TOKEN. Если нет — логинимся.
-    Возвращаем JWT или пустую строку.
+    Проверяем, есть ли глобальный ROBOTA_UA_TOKEN. Если нет — запускаем robota_ua_login.
+    Возвращаем токен или пустую строку.
     """
     global ROBOTA_UA_TOKEN
     if not ROBOTA_UA_TOKEN:
         ROBOTA_UA_TOKEN = robota_ua_login(ROBOTAUA_LOGIN, ROBOTAUA_PASSWORD)
         if not ROBOTA_UA_TOKEN:
-            st.error("Не удалось получить токен robota.ua.")
+            st.error("Не удалось получить токен Robota.ua.")
     return ROBOTA_UA_TOKEN
 
 
 def build_fio(data: dict) -> str:
     """
-    Склеиваем ФИО: сначала 'surname', затем 'name', затем 'fatherName' (если есть).
+    Склеиваем ФИО: «фамилия имя отчество» (если есть).
     """
     parts = []
     if data.get("surname"):
@@ -90,8 +122,8 @@ def build_fio(data: dict) -> str:
 
 def view_applicant_detail(apply_id: int, resume_type: int) -> (str, str):
     """
-    POST /apply/view/{apply_id}?resumeType={resume_type}
-    Возвращаем (fio, phone) для конкретного отклика (apply_id).
+    Получаем детали отклика: POST /apply/view/{apply_id}?resumeType={resume_type}
+    Возвращает (fio, phone).
     """
     token = ensure_robota_ua_token()
     if not token:
@@ -127,8 +159,8 @@ def view_applicant_detail(apply_id: int, resume_type: int) -> (str, str):
 
 def get_resume_by_id_on_robotaua(resume_id: int, mark_view: bool = False) -> (str, str):
     """
-    GET /resume/{resumeId}?markView={true/false}
-    Возвращаем (fio, phone) для резюме с resume_id.
+    Получаем резюме по ID: GET /resume/{resumeId}?markView={true/false}
+    Возвращает (fio, phone).
     """
     token = ensure_robota_ua_token()
     if not token:
@@ -163,42 +195,42 @@ def get_resume_by_id_on_robotaua(resume_id: int, mark_view: bool = False) -> (st
     return fio, phone_raw
 
 
-def extract_robotaua_candidate_id(url: str) -> str:
+def extract_robotaua_candidate_id(link: str) -> str:
     """
-    Ищем '/candidates/<digits>' в URL → возвращаем найденное число как строку.
+    Находим в URL шаблон '/candidates/<цифры>' и возвращаем эти цифры.
     """
-    m = re.search(r"/candidates/(\d+)", url)
+    m = re.search(r"/candidates/(\d+)", link)
     return m.group(1) if m else ""
 
 
-def extract_robotaua_resume_id(url: str) -> str:
+def extract_robotaua_resume_id(link: str) -> str:
     """
-    Ищем '/resume/<digits>' в URL → возвращаем найденное число как строку.
+    Находим в URL шаблон '/resume/<цифры>' и возвращаем эти цифры.
     """
-    m = re.search(r"/resume/(\d+)", url)
+    m = re.search(r"/resume/(\d+)", link)
     return m.group(1) if m else ""
 
 
-def extract_applies_id(url: str) -> str:
+def extract_applies_id(link: str) -> str:
     """
-    Ищем параметр '?id=...' ← возвращаем всё после 'id=' до '&' или конца.
+    Находим в URL параметр 'id=...' и возвращаем значение после '=' до '&' или конца строки.
     """
-    m = re.search(r"id=([^&]+)", url)
+    m = re.search(r"id=([^&]+)", link)
     return m.group(1) if m else ""
 
 
-def extract_interaction_id(url: str) -> str:
+def extract_interaction_id(link: str) -> str:
     """
-    Ищем '/interaction?id=...' ← возвращаем всё после 'id='.
+    Находим в URL '/apply/interaction?id=...' и возвращаем значение после '='.
     """
-    m = re.search(r"/interaction\?id=([^&]+)", url)
+    m = re.search(r"/apply/interaction\?id=([^&]+)", link)
     return m.group(1) if m else ""
 
 
 def get_interaction_details(interaction_id: str) -> dict:
     """
-    GET /apply/interaction/{interaction_id}
-    Возвращает JSON с полями 'applyId', 'resumeId' и т.д.
+    Получаем детали interaction: GET /apply/interaction/{interaction_id}
+    Возвращает JSON с полями 'applyId', 'resumeId' и т. д.
     """
     token = ensure_robota_ua_token()
     if not token:
@@ -220,8 +252,12 @@ def get_interaction_details(interaction_id: str) -> dict:
 
 def parse_robota_ua_link(link: str) -> (str, str):
     """
-    Универсальная функция: по ссылке на robota.ua (кандидат, резюме, отклик, interaction)
-    возвращает (fio, телефон). Если ничего не удалось — ("", "").
+    Универсальный парсер ссылки на Robota.ua:
+    1) /candidates/<ID>
+    2) /resume/<ID>
+    3) /my/vacancies/.../applies?id=...
+    4) /apply/interaction?id=...
+    Возвращает (fio, телефон) или ("", "").
     """
     # 1) /candidates/<id>
     cand_id = extract_robotaua_candidate_id(link)
@@ -233,7 +269,7 @@ def parse_robota_ua_link(link: str) -> (str, str):
     if resume_id:
         return get_resume_by_id_on_robotaua(int(resume_id), mark_view=True)
 
-    # 3) /my/vacancies/.../applies?id=1234-some
+    # 3) /my/vacancies/.../applies?id=<число>[-....]
     applies_str = extract_applies_id(link)
     if applies_str:
         m = re.match(r"(\d+)", applies_str)
@@ -241,7 +277,7 @@ def parse_robota_ua_link(link: str) -> (str, str):
             apply_id = int(m.group(1))
             return view_applicant_detail(apply_id, resume_type=2)
 
-    # 4) /apply/interaction/{interaction_id}
+    # 4) /apply/interaction?id=<interaction_id>
     interaction_id = extract_interaction_id(link)
     if interaction_id:
         details = get_interaction_details(interaction_id)
@@ -252,7 +288,7 @@ def parse_robota_ua_link(link: str) -> (str, str):
         if resume_id2:
             return get_resume_by_id_on_robotaua(int(resume_id2), mark_view=True)
 
-    # Нет распознанного формата — вернём пустые строки
+    # Ничего не подошло
     return "", ""
 
 
@@ -262,27 +298,23 @@ def parse_robota_ua_link(link: str) -> (str, str):
 
 def save_history_to_excel(df: pd.DataFrame, path: str) -> None:
     """
-    Сохраняет DataFrame в Excel-файл по указанному пути (path).
-    Если файл уже существует, дозаписывает новые строки в конец.
-    При этом: ширина колонок автоматически подогнана, шрифт Arial 11.
+    Сохраняет DataFrame в указанный Excel-файл.
+    Если файл существует, дозаписывает новые строки в конец.
+    При записи автоматически подгоняет ширину колонок и задаёт шрифт Arial 11.
     """
-    # Если файл существует — читаем предыдущую историю
     if os.path.exists(path):
         try:
             df_hist = pd.read_excel(path)
         except Exception:
             df_hist = pd.DataFrame()
-        # Объединяем предыдущую историю и новые данные
         df_combined = pd.concat([df_hist, df], ignore_index=True)
     else:
         df_combined = df.copy()
 
-    # Записываем объединённый DataFrame назад в Excel с форматированием
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         df_combined.to_excel(writer, index=False, sheet_name="Резюме")
         worksheet = writer.sheets["Резюме"]
 
-        # Настраиваем ширину каждого столбца
         for col_idx, col_name in enumerate(df_combined.columns, start=1):
             col_letter = get_column_letter(col_idx)
             max_length = max(
@@ -291,7 +323,6 @@ def save_history_to_excel(df: pd.DataFrame, path: str) -> None:
             )
             worksheet.column_dimensions[col_letter].width = max_length + 2
 
-        # Устанавливаем шрифт Arial 11 для всех ячеек
         arial_11 = Font(name="Arial", size=11)
         for row in worksheet.iter_rows(
             min_row=1,
@@ -304,7 +335,7 @@ def save_history_to_excel(df: pd.DataFrame, path: str) -> None:
 
 
 # =============================================================================
-# 3) Основной блок Streamlit-приложения
+# 3) Основная часть Streamlit-приложения
 # =============================================================================
 
 st.title("Сбор резюме с robota.ua и work.ua с историей")
@@ -323,8 +354,11 @@ if st.button("Обработать"):
         st.error("Нужно хотя бы одно URL.")
         st.stop()
 
-    # Функция для форматирования телефона в единый вид: "0XX XXX XX XX"
     def format_phone(raw: str) -> str:
+        """
+        Форматируем телефон в вид "0XX XXX XX XX".
+        Если длина цифр некорректна, возвращаем исходную строку.
+        """
         digits = re.sub(r"\D", "", raw)
         if digits.startswith("380") and len(digits) == 12:
             digits = "0" + digits[3:]
@@ -332,7 +366,7 @@ if st.button("Обработать"):
             return raw
         return f"{digits[0:3]} {digits[3:6]} {digits[6:8]} {digits[8:10]}"
 
-    # ——— Basic-авторизация для work.ua ———
+    # ——— Basic-авторизация для Work.ua: формируем хедер один раз:
     creds = f"{WORK_LOGIN}:{WORK_PASSWORD}"
     work_basic = base64.b64encode(creds.encode("utf-8")).decode("ascii")
     work_headers = {
@@ -341,14 +375,14 @@ if st.button("Обработать"):
         "User-Agent": USER_AGENT
     }
 
-    # ——— Получаем токен robota.ua один раз ———
+    # Получаем токен Robota.ua один раз перед циклом
     ensure_robota_ua_token()
 
     new_results = []
     for url in links:
         try:
             if "work.ua" in url.lower():
-                # Работа через API Work.ua
+                # Обработка через API Work.ua
                 m = re.search(r"/resumes/(\d+)", url)
                 if not m:
                     raise ValueError("Неверный формат URL work.ua")
@@ -366,7 +400,7 @@ if st.button("Обработать"):
                 phone_raw = data.get("contacts", {}).get("phone_prim", "")
 
             else:
-                # Работа через API Robota.ua
+                # Обработка через API Robota.ua
                 fio, phone_raw = parse_robota_ua_link(url)
                 if not fio:
                     st.warning(f"Не удалось получить ФИО по ссылке {url}, пропускаем")
@@ -387,15 +421,13 @@ if st.button("Обработать"):
 
     if new_results:
         df_new = pd.DataFrame(new_results)
-        # Сохраняем (дописываем) в общий файл истории
         save_history_to_excel(df_new, HISTORY_FILE)
 
-        # Выводим на экран всю историю целиком
         df_hist_all = pd.read_excel(HISTORY_FILE)
         st.subheader("Вся история кандидатов")
         st.table(df_hist_all)
 
-        # Предоставляем пользователю возможность скачать файл-историю
+        # Предлагаем скачать файл-историю
         with open(HISTORY_FILE, "rb") as f:
             data_bytes = f.read()
         st.download_button(
