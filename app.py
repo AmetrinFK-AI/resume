@@ -21,10 +21,10 @@ logging.getLogger("requests").setLevel(logging.ERROR)
 # 0) Секреты: читаем логины/пароли из переменных окружения
 # =============================================================================
 
-WORK_LOGIN = "ametrinhr@gmail.com"
-WORK_PASSWORD = "95#Ametrin1995"
-ROBOTAUA_LOGIN = "ametrinhr@gmail.com"
-ROBOTAUA_PASSWORD = "95#Ametrin1995"
+WORK_LOGIN = os.getenv("WORK_LOGIN")
+WORK_PASSWORD = os.getenv("WORK_PASSWORD")
+ROBOTAUA_LOGIN = os.getenv("ROBOTAUA_LOGIN")
+ROBOTAUA_PASSWORD = os.getenv("ROBOTAUA_PASSWORD")
 
 if not WORK_LOGIN or not WORK_PASSWORD:
     st.error("Переменные окружения WORK_LOGIN и WORK_PASSWORD не заданы.")
